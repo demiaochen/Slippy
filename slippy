@@ -38,8 +38,10 @@ import sys
 import argparse
 from argparse import ArgumentParser
 
+
 # Slippy command will be one of 'q', 'p', 'd', or 's'
 SLIPPY_COMMAND = ["q", "p", "d", "s"]
+TEMP_FILE = ".slippy_temp_x"
 TEMP_FILE_W = ".slippy_temp_w"
 TEMP_FILE_R = ".slippy_temp_r"
 FILE_BUFFER_LIMIT = 8100000  # 1MB read limit from stdin
@@ -49,45 +51,102 @@ DELETE = int(1)
 QUIT = int(2)
 REPLACED = int(3)
 
-################################ COMMANDs ####################################
+################################ COMMANDs #####################################
+
+"""    
+command_args = {
+    "position": int or regex,  # -1 for all, -2 for last
+    "position_start": int or regex,
+    "position_end":   int or regex,
+    "in_position": bool,   # toggled by start and end
+    "command_type": str,
+    "is_global": bool,
+    "pattern": regex,
+    "target": regex,
+    "replacement": regex,
+}
+"""
+def is_in_position(sed_command, position, line, is_last_line):
+    if sed_command["position_start"] == 0:
+        if sed_command["position"] == -1:
+            return True
+        if sed_command["position"] == position:
+            return True
+        if sed_command["position"] == -2 and is_last_line == True:
+            return True
+    else:
+        old = sed_command["in_position"]
+        alter_flag = False
+        match_flag = False
+        if type(sed_command["position_end"]) == int:
+            if sed_command["position_end"] == position:
+                sed_command["in_position"] = False
+                alter_flag = True
+        else:
+            if re.search(sed_command["position_end"], line):
+                sed_command["in_position"] = False
+                alter_flag = True
+
+        if type(sed_command["position_start"]) == int:
+            if sed_command["position_start"] == position:
+                sed_command["in_position"] = True
+                alter_flag = False
+                match_flag = True
+        else:
+            if re.search(sed_command["position_start"], line):
+                sed_command["in_position"] = True
+                alter_flag = False
+                match_flag = True
+
+        if type(sed_command["position_end"]) == int:
+            if sed_command["position_end"] < position:
+                sed_command["in_position"] = False
+                return match_flag
+                
+        if alter_flag == True:
+            return old
+
+        return sed_command["in_position"]
+
+    return False
 
 
-def slippy_quit(sed_command, line, position, args):
-    if sed_command["position"] == -1 or sed_command["position"] == position:
+def slippy_quit(sed_command, line, position, is_last_line):
+    if is_in_position(sed_command, position, line, is_last_line):
         if re.search(sed_command["pattern"], line):
             return QUIT
     return 0
 
 
-def slippy_delete(sed_command, line, position, args):
-    if sed_command["position"] == -1 or sed_command["position"] == position:
+def slippy_delete(sed_command, line, position, is_last_line):
+
+    if is_in_position(sed_command, position, line, is_last_line):
         if re.search(sed_command["pattern"], line):
             return DELETE
     return 0
 
 
-def slippy_print(sed_command, line, position, args):
-    if sed_command["position"] == -1 or sed_command["position"] == position:
+def slippy_print(sed_command, line, position, is_last_line):
+    if is_in_position(sed_command, position, line, is_last_line):
         if re.search(sed_command["pattern"], line):
             print(line, end="")
     return 0
 
 
-def slippy_search(sed_command, line, position, args):
+def slippy_search(sed_command, line, position, is_last_line):
     count = 1
     if sed_command["is_global"]:
         count = 0
 
-    if sed_command["position"] == position or sed_command["position"] == -1:
+    if is_in_position(sed_command, position, line, is_last_line):
         if re.search(sed_command["pattern"], line):
-            print(
-                re.sub(
+            line = re.sub(
                     sed_command["target"], sed_command["replacement"], line, count=count
-                ),
-                end="",
-            )
+                )
+            print(str(line), end="")
             return REPLACED
     return 0
+
 
 # perform_command is a dictionary that maps command to function
 perform_command = {
@@ -99,7 +158,8 @@ perform_command = {
 
 
 def perform(sed_command_list, args):
-    idx = 0
+    current_file = 0
+    position = 1
     line = sys.stdin.readline()
     # readline returns an empty string if the end of the file has been reached
     while line != "":
@@ -107,12 +167,19 @@ def perform(sed_command_list, args):
         is_last_line = False
         next_line = sys.stdin.readline()
         if next_line == "":
-            is_last_line = True
+            current_file += 1
+            try:
+                sys.stdin = args.files[current_file]
+                next_line = sys.stdin.readline()
+            except:
+                is_last_line = True
 
         for sed_command in sed_command_list:
             signal = perform_command[sed_command["command_type"]](
-                sed_command, line, idx + 1, args
+                sed_command, line, position, is_last_line
             )
+            if signal == REPLACED:
+                break
             if signal == DELETE:
                 break
             if signal == QUIT:
@@ -124,37 +191,34 @@ def perform(sed_command_list, args):
             break
 
         line = next_line
-        idx += 1
-
+        position += 1
 
 
 #################################### HELPERs ######################################
 
 
 def get_splitter(string):
+    if len(string) == 0:
+        return None
     if string[0] in ["s"]:
         splitter = string[1]
         if splitter == string[-1]:
             return splitter
     for ch in string:
-        if ch in ["/", "|", "#"]:
+        if ch in ["/", "|"]:
             return ch
     return None
 
 
 def invalid_command():
-    # if os.isfile(TEMP_FILE_W):
-    #     os.remove(TEMP_FILE_W)
-    # if os.isfile(TEMP_FILE_R):
-    #     os.remove(TEMP_FILE_R)
     print(f"{sys.argv[0]}: command line: invalid command")
     sys.exit(1)
 
 
 # return regex pattern
-def get_pattern(commands, position):
+def get_pattern(commands, position, splitter):
     try:
-        return re.compile(commands[position])
+        return re.compile(commands[position].replace(splitter,""),)
     except:
         print(f"{sys.argv[0]}: command line: invalid command")
         sys.exit(1)
@@ -183,9 +247,16 @@ def main():
     )
     parser.add_argument("-i", action="store_true")
     parser.add_argument("-n", action="store_true")
-    # parser.add_argument("-f script", action="store_true")
+    parser.add_argument("-f", action="store_true")
     parser.add_argument("command")
-    parser.add_argument("files", action="store_true")
+    # read multiple files to a list
+    parser.add_argument(
+        "files",
+        metavar="FILE",
+        type=argparse.FileType("r"),
+        nargs="*",
+        help="files to read, if empty, stdin is used",
+    )
 
     if len(sys.argv) == 1:
         parser.print_usage()
@@ -195,12 +266,20 @@ def main():
         args, unknown = parser.parse_known_args()
         if unknown != []:
             print(f"{sys.argv[0]}: error")
-            sys.exit(1)
+            # sys.exit(1)
     except argparse.ArgumentError as e:
         print(e)
 
-    # change stdout to
-    # sys.stdout = open(TEMP_FILE_W, 'w')
+
+    if args.f:
+        try:
+            args.command = open(args.command, "r").read().rstrip()
+        except:
+            print(f"{sys.argv[0]}: error")
+            sys.exit(1)
+
+    if len(args.files) != 0:
+        sys.stdin = args.files[0]
 
     # commands separated by ; and newline
     args_command_list = re.split(";|\n", args.command)
@@ -223,26 +302,47 @@ def main():
     """
 
     for args_command in args_command_list:
-
-        position = -1      # -1 means all positions
+        # remove # and after, and white space
+        args_command = re.sub("#.*", "", args_command).strip()
+        position = -1  # -1 means all positions
         position_start = 0
         position_end = 0
         is_global = False
-        pattern = ""       # default pattern, match everything
-        target = "" 
+        pattern = ""  # default pattern, match everything
+        target = ""
         replacement = ""
 
+        if args_command == "":
+            continue
         splitter = get_splitter(args_command)
+        
+        # '3,5d'
+        # '/1$/,/^2/d'
+        # '/4/,/6/s/[12]/9/'
+        # '3,/2/d'
+        if ',' in args_command:
+            addr_command = args_command.split(',')
+            addr_command = list(map(str.strip, addr_command)) # strip every element
+            try:
+                position_start = int(addr_command[0])
+            except:
+                position_start = get_pattern(addr_command, 0, splitter)
+            args_command = addr_command[1:][0]
 
         # Regex mode
         if splitter != None:  # sed splitter
+            
             commands = args_command.split(splitter)
+            commands = list(map(str.strip, commands)) # strip every element
 
-            # /pattern/command  eg /.3/q
+            # /pattern/command  eg /.3/q /17/d
             # /pattern/command/target/repl/q  eg '/1.1/s/1/-/g'
             if commands[0] == "":
-                pattern = get_pattern(commands, 1)
+                pattern = get_pattern(commands, 1, splitter)
+                position_end = get_pattern(commands, 1, splitter)
                 sed_command = get_sed_command(commands, 2)
+                if position_start != 0:
+                    pattern = ""
                 # '/1.1/s/1/-/g'
                 if sed_command == "s":
                     try:
@@ -267,6 +367,7 @@ def main():
                 elif len(head) == 3:  #'5s/5/9/g' ['', '5', 's']
                     try:
                         position = int(head[1])
+                        position_end = int(head[1])
                     except:
                         invalid_command()
                     sed_command = get_sed_command(head, 2)
@@ -281,7 +382,7 @@ def main():
 
                 if sed_command == "s":
                     try:
-                        pattern = get_pattern(commands, 1)
+                        pattern = get_pattern(commands, 1, splitter)
                         target = commands[1]
                         replacement = commands[2]
                     except:
@@ -295,12 +396,13 @@ def main():
             if len(args_command) == 1:
                 position = -1
             else:
-                if args_command[:-1] == '$':
+                if args_command[:-1] == "$":
                     # -2 means last line
                     position = -2
-                else:    
+                else:
                     try:
                         position = int(args_command[:-1])
+                        position_end = int(args_command[:-1])
                     except:
                         invalid_command()
                 # handled by flag error
