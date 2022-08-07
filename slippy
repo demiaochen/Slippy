@@ -39,10 +39,9 @@ import argparse
 from argparse import ArgumentParser
 
 
-# Slippy command will be one of 'q', 'p', 'd', or 's'
+# Slippy command will be one of the following:
 SLIPPY_COMMAND = ["q", "p", "d", "s", "a", "i", "c"]
 TEMP_FILE = ".slippy_temp_w"
-FILE_BUFFER_LIMIT = 8100000  # 1MB read limit from stdin
 
 # signal macros
 DELETE = int(1)
@@ -51,7 +50,9 @@ REPLACED = int(3)
 APPEND = int(4)
 CHANGE = int(5)
 
-################################ COMMANDs #####################################
+##############################################################################
+#                               COMMANDs                                     #
+##############################################################################
 
 """    
 command_args = {
@@ -150,7 +151,6 @@ def slippy_search(sed_command, line, position, is_last_line):
 
 
 def slippy_append(sed_command, line, position, is_last_line):
-    # print(sed_command["position"], position)
     if is_in_position(sed_command, position, line, is_last_line):
         return APPEND
 
@@ -212,19 +212,15 @@ def perform(sed_command_list, args):
             print(sed_command["replacement"])
         if signal == QUIT:
             break
-        
+
         # -i replaces files
         if args.i and next_line == "":
             sys.stdout.close()
             sys.stdout = sys.__stdout__
-            current_file -= 1
             if args.i:
-                shutil.copyfile(TEMP_FILE, args.files[current_file].name)
-            current_file += 1
+                shutil.copyfile(TEMP_FILE, args.files[current_file - 1].name)
             try:
-                sys.stdin = args.files[current_file]
-                if args.i:
-                    sys.stdout = args.files[current_file] 
+                sys.stdout = args.files[current_file]
             except:
                 pass
 
@@ -232,7 +228,9 @@ def perform(sed_command_list, args):
         position += 1
 
 
-#################################### HELPERs ######################################
+##############################################################################
+#                               HELPERs                                      #
+##############################################################################
 
 
 def get_splitter(string):
@@ -279,7 +277,9 @@ def get_sed_command(commands, position):
         invalid_command()
 
 
-################################## MAIN ######################################
+##############################################################################
+#                                MAIN                                        #
+##############################################################################
 
 
 def main():
@@ -309,7 +309,6 @@ def main():
         args, unknown = parser.parse_known_args()
         if unknown != []:
             print(f"{sys.argv[0]}: error")
-            # sys.exit(1)
     except argparse.ArgumentError as e:
         print(e)
 
@@ -323,32 +322,17 @@ def main():
     if len(args.files) != 0:
         sys.stdin = args.files[0]
         if args.i:
-            sys.stdout = open(TEMP_FILE, 'w')
-
+            sys.stdout = open(TEMP_FILE, "w")
 
     # commands separated by ; and newline
     args_command_list = re.split(";|\n", args.command)
     sed_command_list = []
-    """    
-    command_args = {
-
-        "position": int or regex,  # -1 for all, -2 for last
-
-        "position_start": int or regex,
-        "position_end":   int or regex,
-        "in_position": bool,   # toggled by start and end
-
-        "command_type": str,
-        "is_global": bool,
-        "pattern": regex,
-        "target": regex,
-        "replacement": regex,
-    }
-    """
 
     for args_command in args_command_list:
         # remove # and after, and white space
         args_command = re.sub("#.*", "", args_command).strip()
+
+        # default value for sed_command dict
         position = -1  # -1 means all positions
         position_start = 0
         position_end = 0
@@ -486,6 +470,7 @@ def main():
     sys.stdout.close()
     if os.path.exists(TEMP_FILE):
         os.remove(TEMP_FILE)
+
 
 if __name__ == "__main__":
     main()
