@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+
+"""
+2041 Assignment 2 Slippy
+Written by: Demiao Chen (z5289988)
+Date: 6-Aug-2022
+
+    Slippy stands for [S]ed [L]anguage [I]nterpreter in [P]ure [PY]thon.
+    A subset of the important Unix/Linux tool Sed.
+    Sed is a very complex program that has many commands.
+    Slippy is a POSIX-compatible subset of sed with extended regular expressions (EREs).
+
+"""
+
+import sys
+import re
+import argparse
+from argparse import ArgumentParser
+
+# Slippy command will be one of 'q', 'p', 'd', or 's'
+SLIPPY_COMMAND = ["q", "p", "d", "s"]
+
+################################ COMMAND ####################################
+
+
+def sed_quit(pattern, args):
+    if type(pattern) == int:
+        for _ in range(0, int(pattern)):
+            line = sys.stdin.readline()
+            if line == "":
+                break
+            if not args.n:
+                print(line, end="")
+
+    else:
+        for line in sys.stdin.readlines():
+            if not args.n:
+                print(line, end="")
+            if re.search(pattern, line):
+                sys.exit(0)
+
+
+def sed_print(pattern, args):
+    if pattern == " ":
+        for line in sys.stdin.readlines():
+            if not args.n:
+                print(line, end="")
+            print(line, end="")
+    elif type(pattern) == int:
+        for idx, line in enumerate(sys.stdin.readlines()):
+            if not args.n:
+                print(line, end="")
+            # print target line
+            if idx + 1 == int(pattern):
+                print(line, end="")
+    else:
+        for line in sys.stdin.readlines():
+            if not args.n:
+                print(line, end="")
+            if re.search(pattern, line):
+                print(line, end="")
+
+
+def sed_delete(pattern, args):
+    if pattern == " ":
+        pass
+    elif type(pattern) == int:
+        for idx, line in enumerate(sys.stdin.readlines()):
+            if idx + 1 == int(pattern):
+                continue
+            if not args.n:
+                print(line, end="")
+    else:
+        for line in sys.stdin.readlines():
+            if re.search(pattern, line):
+                continue
+            if not args.n:
+                print(line, end="")
+
+
+def sed_search(position, pattern, target, replacement, is_global, args):
+    if position == -1:
+        for idx, line in enumerate(sys.stdin.readlines()):
+            # find pattern match, replace it
+            if re.search(pattern, line):
+                count = 1
+                if is_global:
+                    count = 0
+                line = re.sub(target, replacement, line, count=count)
+                print(line, end="")
+                continue
+            if not args.n:
+                print(line, end="")
+    else:
+        for idx, line in enumerate(sys.stdin.readlines()):
+            # only replace position line
+            if idx + 1 == position:
+                # find pattern match, replace it
+                if re.search(pattern, line):
+                    count = 1
+                    if is_global:
+                        count = 0
+                    line = re.sub(target, replacement, line, count=count)
+                    print(line, end="")
+                    continue
+            if not args.n:
+                print(line, end="")
+
+
+# options is a dictionary that maps command to function
+options = {"q": sed_quit, "p": sed_print, "d": sed_delete, "s": sed_search}
+
+
+#################################### HELPER ######################################
+
+
+def get_splitter(string):
+    for ch in string:
+        if ch in ["/", "|", "#"]:
+            return ch
+    return None
+
+
+def invalid_command():
+    print("slippy: command line: invalid command")
+    sys.exit(1)
+
+
+# return regex pattern
+def get_pattern(commands, position):
+    try:
+        return re.compile(commands[position])
+    except:
+        print("slippy: command line: invalid command")
+        sys.exit(1)
+
+
+# return string
+def get_sed_command(commands, position):
+    try:
+        sed_ommand = commands[position]
+        if sed_ommand not in SLIPPY_COMMAND:
+            invalid_command()
+        return sed_ommand
+    except:
+        invalid_command()
+
+
+################################## MAIN ######################################
+
+
+def main():
+    regex_mode = True
+    # command line arguments analysis
+    parser = ArgumentParser(
+        usage="slippy [-i] [-n] [-f <script-file> | <sed-command>] [<files>...]",
+        exit_on_error=False,
+    )
+    parser.add_argument("-i", action="store_true")
+    parser.add_argument("-n", action="store_true")
+    # parser.add_argument("-f script", action="store_true")
+    parser.add_argument("command")
+    parser.add_argument("files", action="store_true")
+
+    if len(sys.argv) == 1:
+        parser.print_usage()
+        sys.exit(1)
+
+    try:
+        args, unknown = parser.parse_known_args()
+        if unknown != []:
+            print("slippy: error")
+            sys.exit(1)
+    except argparse.ArgumentError as e:
+        print(e)
+
+    splitter = get_splitter(args.command)
+
+    # Regex mode
+    if splitter != None:  # sed splitter
+        commands = args.command.split(splitter)
+        is_global = False
+        # -1 means apply to all lines
+        position = -1
+
+        # /pattern/command  eg /.3/q
+        # /pattern/command/target/repl/q  eg '/1.1/s/1/-/g'
+        if commands[0] == "":
+            pattern = get_pattern(commands, 1)
+            sed_command = get_sed_command(commands, 2)
+            # '/1.1/s/1/-/g'
+            if sed_command == "s":
+                try:
+                    target = commands[3]
+                    replacement = commands[4]
+                except:
+                    invalid_command()
+                try:
+                    if commands[5] == "g":
+                        is_global = True
+                except:
+                    pass
+
+        # s/pattern/replacement/g
+        # '5s/5/9/g'
+        # ['5s', '5', '9', 'g']
+        else:
+            # separate number and command
+            head = re.split("(\d+)", commands[0])
+            if len(head) == 1:  # s/5/9/g' ['s']
+                sed_command = head[0]
+            elif len(head) == 3:  #'5s/5/9/g' ['', '5', 's']
+                try:
+                    position = int(head[1])
+                except:
+                    invalid_command()
+                sed_command = get_sed_command(head, 2)
+            else:
+                invalid_command()
+
+            try:
+                if commands[3] == "g":
+                    is_global = True
+            except:
+                pass
+
+            if sed_command == "s":
+                try:
+                    pattern = get_pattern(commands, 1)
+                    target = commands[1]
+                    replacement = commands[2]
+                except:
+                    invalid_command()
+
+    # Number Mode
+    else:
+        sed_command = args.command[-1]
+        if len(args.command) == 1:
+            pattern = " "
+        else:
+            try:
+                pattern = int(args.command[:-1])
+            except:
+                invalid_command()
+            # handled by flag error
+            # if pattern < 0:
+            #     args.print_usage()
+            #     sys.exit(1)
+        if sed_command not in ["q", "p", "d"]:
+            invalid_command()
+
+    if sed_command not in SLIPPY_COMMAND:
+        invalid_command()
+
+    # perform command
+    if sed_command in ["q", "p", "d"]:
+        options[sed_command](pattern, args)
+    elif sed_command == "s":
+        sed_search(position, pattern, target, replacement, is_global, args)
+
+
+if __name__ == "__main__":
+    main()
