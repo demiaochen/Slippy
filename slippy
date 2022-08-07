@@ -236,10 +236,19 @@ def perform(sed_command_list, args):
 def get_splitter(string):
     if len(string) == 0:
         return None
-    if string[0] in ["s"]:
+    head = re.split("(\d+)", string)
+    # s_1_ll_g
+    if string[0] == "s":
         splitter = string[1]
-        if splitter == string[-1]:
-            return splitter
+        return splitter
+    # 5s_1_ll_g
+    else:
+        try:
+            if head[2][0] == "s":
+                splitter = head[2][1]
+                return splitter
+        except:
+            pass
     for ch in string:
         if ch in ["/", "|"]:
             return ch
@@ -363,7 +372,6 @@ def main():
 
             commands = args_command.split(splitter)
             commands = list(map(str.strip, commands))  # strip every element
-
             # /pattern/command  eg /.3/q /17/d
             # /pattern/command/target/repl/q  eg '/1.1/s/1/-/g'
             if commands[0] == "":
@@ -376,6 +384,8 @@ def main():
                 if sed_command == "s":
                     try:
                         target = commands[3]
+                        if target == "":
+                            target = " "
                         replacement = commands[4]
                     except:
                         invalid_command()
@@ -413,6 +423,8 @@ def main():
                     try:
                         pattern = get_pattern(commands, 1, splitter)
                         target = commands[1]
+                        if target == "":
+                            target = " "
                         replacement = commands[2]
                     except:
                         invalid_command()
