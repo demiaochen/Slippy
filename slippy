@@ -40,16 +40,16 @@ from argparse import ArgumentParser
 
 
 # Slippy command will be one of 'q', 'p', 'd', or 's'
-SLIPPY_COMMAND = ["q", "p", "d", "s"]
-TEMP_FILE = ".slippy_temp_x"
-TEMP_FILE_W = ".slippy_temp_w"
-TEMP_FILE_R = ".slippy_temp_r"
+SLIPPY_COMMAND = ["q", "p", "d", "s", "a", "i", "c"]
+TEMP_FILE = ".slippy_temp_w"
 FILE_BUFFER_LIMIT = 8100000  # 1MB read limit from stdin
 
-# signals
+# signal macros
 DELETE = int(1)
 QUIT = int(2)
 REPLACED = int(3)
+APPEND = int(4)
+CHANGE = int(5)
 
 ################################ COMMANDs #####################################
 
@@ -66,6 +66,8 @@ command_args = {
     "replacement": regex,
 }
 """
+
+
 def is_in_position(sed_command, position, line, is_last_line):
     if sed_command["position_start"] == 0:
         if sed_command["position"] == -1:
@@ -102,7 +104,7 @@ def is_in_position(sed_command, position, line, is_last_line):
             if sed_command["position_end"] < position:
                 sed_command["in_position"] = False
                 return match_flag
-                
+
         if alter_flag == True:
             return old
 
@@ -119,7 +121,6 @@ def slippy_quit(sed_command, line, position, is_last_line):
 
 
 def slippy_delete(sed_command, line, position, is_last_line):
-
     if is_in_position(sed_command, position, line, is_last_line):
         if re.search(sed_command["pattern"], line):
             return DELETE
@@ -141,11 +142,28 @@ def slippy_search(sed_command, line, position, is_last_line):
     if is_in_position(sed_command, position, line, is_last_line):
         if re.search(sed_command["pattern"], line):
             line = re.sub(
-                    sed_command["target"], sed_command["replacement"], line, count=count
-                )
+                sed_command["target"], sed_command["replacement"], line, count=count
+            )
             print(str(line), end="")
             return REPLACED
     return 0
+
+
+def slippy_append(sed_command, line, position, is_last_line):
+    # print(sed_command["position"], position)
+    if is_in_position(sed_command, position, line, is_last_line):
+        return APPEND
+
+
+def slippy_insert(sed_command, line, position, is_last_line):
+    if is_in_position(sed_command, position, line, is_last_line):
+        print(sed_command["replacement"])
+
+
+def slippy_change(sed_command, line, position, is_last_line):
+    if is_in_position(sed_command, position, line, is_last_line):
+        print(sed_command["replacement"])
+        return CHANGE
 
 
 # perform_command is a dictionary that maps command to function
@@ -154,6 +172,9 @@ perform_command = {
     "p": slippy_print,
     "d": slippy_delete,
     "s": slippy_search,
+    "a": slippy_append,
+    "i": slippy_insert,
+    "c": slippy_change,
 }
 
 
@@ -185,10 +206,27 @@ def perform(sed_command_list, args):
             if signal == QUIT:
                 break
 
-        if not args.n and signal != DELETE and signal != REPLACED:
+        if not args.n and signal != DELETE and signal != REPLACED and signal != CHANGE:
             print(line, end="")
+        if signal == APPEND:
+            print(sed_command["replacement"])
         if signal == QUIT:
             break
+        
+        # -i replaces files
+        if args.i and next_line == "":
+            sys.stdout.close()
+            sys.stdout = sys.__stdout__
+            current_file -= 1
+            if args.i:
+                shutil.copyfile(TEMP_FILE, args.files[current_file].name)
+            current_file += 1
+            try:
+                sys.stdin = args.files[current_file]
+                if args.i:
+                    sys.stdout = args.files[current_file] 
+            except:
+                pass
 
         line = next_line
         position += 1
@@ -212,15 +250,21 @@ def get_splitter(string):
 
 def invalid_command():
     print(f"{sys.argv[0]}: command line: invalid command")
+    if os.path.exists(TEMP_FILE):
+        os.remove(TEMP_FILE)
     sys.exit(1)
 
 
 # return regex pattern
 def get_pattern(commands, position, splitter):
     try:
-        return re.compile(commands[position].replace(splitter,""),)
+        return re.compile(
+            commands[position].replace(splitter, ""),
+        )
     except:
         print(f"{sys.argv[0]}: command line: invalid command")
+        if os.path.exists(TEMP_FILE):
+            os.remove(TEMP_FILE)
         sys.exit(1)
 
 
@@ -239,7 +283,6 @@ def get_sed_command(commands, position):
 
 
 def main():
-
     # command line arguments analysis
     parser = ArgumentParser(
         usage=f"{sys.argv[0]} [-i] [-n] [-f <script-file> | <sed-command>] [<files>...]",
@@ -270,7 +313,6 @@ def main():
     except argparse.ArgumentError as e:
         print(e)
 
-
     if args.f:
         try:
             args.command = open(args.command, "r").read().rstrip()
@@ -280,6 +322,9 @@ def main():
 
     if len(args.files) != 0:
         sys.stdin = args.files[0]
+        if args.i:
+            sys.stdout = open(TEMP_FILE, 'w')
+
 
     # commands separated by ; and newline
     args_command_list = re.split(";|\n", args.command)
@@ -315,14 +360,14 @@ def main():
         if args_command == "":
             continue
         splitter = get_splitter(args_command)
-        
+
         # '3,5d'
         # '/1$/,/^2/d'
         # '/4/,/6/s/[12]/9/'
         # '3,/2/d'
-        if ',' in args_command:
-            addr_command = args_command.split(',')
-            addr_command = list(map(str.strip, addr_command)) # strip every element
+        if "," in args_command:
+            addr_command = args_command.split(",")
+            addr_command = list(map(str.strip, addr_command))  # strip every element
             try:
                 position_start = int(addr_command[0])
             except:
@@ -331,9 +376,9 @@ def main():
 
         # Regex mode
         if splitter != None:  # sed splitter
-            
+
             commands = args_command.split(splitter)
-            commands = list(map(str.strip, commands)) # strip every element
+            commands = list(map(str.strip, commands))  # strip every element
 
             # /pattern/command  eg /.3/q /17/d
             # /pattern/command/target/repl/q  eg '/1.1/s/1/-/g'
@@ -391,26 +436,33 @@ def main():
         # Address Mode
         # '5d'
         # '$d'
+        # '3a hello'
         else:
-            sed_command = args_command[-1]
-            if len(args_command) == 1:
-                position = -1
-            else:
-                if args_command[:-1] == "$":
-                    # -2 means last line
+            if args_command.split()[0][-1] in ["a", "i", "c"]:
+                sed_command = args_command.split()[0][-1]
+                replacement = (" ").join(args_command.split()[1:])
+                if args_command.split()[0][0:-1] == "$":
                     position = -2
+                elif args_command.split()[0][0:-1] == "":
+                    position = -1
                 else:
-                    try:
-                        position = int(args_command[:-1])
-                        position_end = int(args_command[:-1])
-                    except:
-                        invalid_command()
-                # handled by flag error
-                # if pattern < 0:
-                #     args.print_usage()
-                #     sys.exit(1)
-            if sed_command not in ["q", "p", "d"]:
-                invalid_command()
+                    position = int(args_command.split()[0][0:-1])
+            else:
+                sed_command = args_command[-1]
+                if len(args_command) == 1:
+                    position = -1
+                else:
+                    if args_command[:-1] == "$":
+                        # -2 means last line
+                        position = -2
+                    else:
+                        try:
+                            position = int(args_command[:-1])
+                            position_end = int(args_command[:-1])
+                        except:
+                            invalid_command()
+                if sed_command not in ["q", "p", "d"]:
+                    invalid_command()
 
         if sed_command not in SLIPPY_COMMAND:
             invalid_command()
@@ -429,9 +481,11 @@ def main():
 
         sed_command_list.append(command_args)
 
-    # print(sed_command_list)
     perform(sed_command_list, args)
 
+    sys.stdout.close()
+    if os.path.exists(TEMP_FILE):
+        os.remove(TEMP_FILE)
 
 if __name__ == "__main__":
     main()
